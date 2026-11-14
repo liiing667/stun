@@ -67,3 +67,29 @@ var ErrAttributeSizeOverflow = errors.New("attribute size overflow")
 
 // errInvalidErrorCode means that ErrorCode can't be encoded in ERROR-CODE.
 var errInvalidErrorCode = errors.New("invalid ErrorCode")
+
+// ErrAttributeAfterIntegrity means that an attribute not permitted by
+// RFC 8489 was found after MESSAGE-INTEGRITY or MESSAGE-INTEGRITY-SHA256.
+// After MESSAGE-INTEGRITY only MESSAGE-INTEGRITY-SHA256 and FINGERPRINT may
+// follow; after MESSAGE-INTEGRITY-SHA256 (without MESSAGE-INTEGRITY) only
+// FINGERPRINT may follow. Anything else is not covered by the integrity
+// check and is rejected by strict decoding.
+var ErrAttributeAfterIntegrity = errors.New("attribute after MESSAGE-INTEGRITY/MESSAGE-INTEGRITY-SHA256")
+
+// ErrDuplicateIntegrity means that MESSAGE-INTEGRITY or
+// MESSAGE-INTEGRITY-SHA256 appeared more than once in a message.
+var ErrDuplicateIntegrity = errors.New("duplicate MESSAGE-INTEGRITY/MESSAGE-INTEGRITY-SHA256 attribute")
+
+// ErrFingerprintNotLast means that an attribute was found after the
+// FINGERPRINT attribute. FINGERPRINT must be the last attribute in
+// a message.
+var ErrFingerprintNotLast = errors.New("attribute after FINGERPRINT: FINGERPRINT must be last")
+
+// ErrDuplicateFingerprint means that FINGERPRINT appeared more than
+// once in a message.
+var ErrDuplicateFingerprint = errors.New("duplicate FINGERPRINT attribute")
+
+// ErrUnknownRequiredAttribute means that a message contained an attribute
+// from the comprehension-required range (0x0000-0x7FFF) that is not known
+// to this library.
+var ErrUnknownRequiredAttribute = errors.New("unknown comprehension-required attribute")

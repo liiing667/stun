@@ -81,6 +81,18 @@ func Decode(data []byte, m *Message) error {
 	return m.Decode()
 }
 
+// DecodeStrict decodes Message from data to m like Decode, but enforces
+// strict RFC 8489 validation. See Message.DecodeStrict for the exact
+// set of enforced rules.
+func DecodeStrict(data []byte, m *Message) error {
+	if m == nil {
+		return ErrDecodeToNil
+	}
+	m.Raw = append(m.Raw[:0], data...)
+
+	return m.DecodeStrict()
+}
+
 // Message represents a single STUN packet. It uses aggressive internal
 // buffering to enable zero-allocation encoding and decoding,
 // so there are some usage constraints:
@@ -408,7 +420,39 @@ var ErrUnexpectedHeaderEOF = errors.New("unexpected EOF: not enough bytes to rea
 var ErrInvalidType = errors.New("STUN message type 0 is reserved")
 
 // Decode decodes m.Raw into m.
-func (m *Message) Decode() error { //nolint:cyclop
+//
+// Decode is lenient: attributes following MESSAGE-INTEGRITY or
+// MESSAGE-INTEGRITY-SHA256 that are not permitted by RFC 8489 are
+// silently dropped, repeated integrity attributes are tolerated, and
+// unknown comprehension-required attributes are accepted. Use
+// DecodeStrict to reject such messages.
+func (m *Message) Decode() error {
+	return m.decode(false)
+}
+
+// DecodeStrict decodes m.Raw into m, enforcing the RFC 8489 message
+// structure rules that Decode relaxes:
+//
+//   - MESSAGE-INTEGRITY and MESSAGE-INTEGRITY-SHA256 delimit the
+//     integrity-protected portion of the message: after MESSAGE-INTEGRITY
+//     only MESSAGE-INTEGRITY-SHA256 and FINGERPRINT may follow, and after
+//     MESSAGE-INTEGRITY-SHA256 (when MESSAGE-INTEGRITY is absent) only
+//     FINGERPRINT may follow. Any other attribute in that position is
+//     rejected with ErrAttributeAfterIntegrity instead of being silently
+//     dropped, because it is not covered by the integrity check.
+//   - MESSAGE-INTEGRITY and MESSAGE-INTEGRITY-SHA256 must each appear at
+//     most once, otherwise ErrDuplicateIntegrity is returned.
+//   - FINGERPRINT must be the last attribute and must appear at most
+//     once, otherwise ErrFingerprintNotLast or ErrDuplicateFingerprint
+//     is returned.
+//   - Unknown comprehension-required attributes (0x0000-0x7FFF) are
+//     rejected with ErrUnknownRequiredAttribute. Unknown
+//     comprehension-optional attributes remain accepted.
+func (m *Message) DecodeStrict() error {
+	return m.decode(true)
+}
+
+func (m *Message) decode(strict bool) error { //nolint:cyclop
 	// decoding message header
 	buf := m.Raw
 	if len(buf) < messageHeaderSize {
@@ -442,6 +486,7 @@ func (m *Message) Decode() error { //nolint:cyclop
 	)
 	seenMI := false
 	seenMI256 := false
+	seenFingerprint := false
 	for offset < size {
 		// checking that we have enough bytes to read header
 		if len(b) < attributeHeaderSize {
@@ -479,6 +524,31 @@ func (m *Message) Decode() error { //nolint:cyclop
 		afterMI := seenMI && !isMI256 && !isFingerprint
 		afterMI256Only := !seenMI && seenMI256 && !isFingerprint
 		afterIntegrity := afterMI || afterMI256Only
+
+		if strict {
+			if seenFingerprint {
+				if isFingerprint {
+					return fmt.Errorf("%w (0x%04x)", ErrDuplicateFingerprint, attr.Type.Value())
+				}
+
+				return fmt.Errorf("%w: %s", ErrFingerprintNotLast, attr.Type)
+			}
+			if (isMI && seenMI) || (isMI256 && seenMI256) {
+				return fmt.Errorf("%w: %s", ErrDuplicateIntegrity, attr.Type)
+			}
+			if afterIntegrity {
+				return fmt.Errorf("%w: %s", ErrAttributeAfterIntegrity, attr.Type)
+			}
+			if attr.Type.Required() && !attr.Type.Known() {
+				return fmt.Errorf("%w: %s", ErrUnknownRequiredAttribute, attr.Type)
+			}
+			m.Attributes = append(m.Attributes, attr)
+			seenMI = seenMI || isMI
+			seenMI256 = seenMI256 || isMI256
+			seenFingerprint = seenFingerprint || isFingerprint
+
+			continue
+		}
 
 		if afterIntegrity {
 			if m.logger != nil {
